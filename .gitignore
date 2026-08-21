@@ -1,0 +1,18 @@
+# Ignore everything by default because this folder contains old bot scripts
+# with hardcoded Discord tokens. Only the VDV2 Railway files are allowed below.
+*
+
+!.gitignore
+!.env.example
+!RAILWAY.md
+!package.json
+!package-lock.json
+!vdv2-chest-bot.js
+!assets/
+!assets/vdv2chest.png
+
+.env
+data/
+node_modules/
+npm-debug.log*
+.DS_Store

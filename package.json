@@ -1,0 +1,14 @@
+{
+  "scripts": {
+    "start": "node vdv2-chest-bot.js",
+    "check": "node --check vdv2-chest-bot.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "discord.js": "^14.17.3",
+    "discord.js-selfbot-v13": "^3.1.4",
+    "dotenv": "^16.5.0"
+  }
+}
