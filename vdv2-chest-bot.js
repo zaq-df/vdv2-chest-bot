@@ -33,7 +33,7 @@ const CONFIG = {
     chestImagePath: resolveProjectPath(process.env.CHEST_IMAGE_PATH || DEFAULT_CHEST_IMAGE_PATH),
     vdv2TagRoleId: process.env.VDV2_TAG_ROLE_ID || '',
     boosterRoleId: process.env.BOOSTER_ROLE_ID || '',
-    coinEmoji: process.env.COIN_EMOJI || '🏛️',
+    coinEmoji: process.env.COIN_EMOJI || '🪙',
 };
 
 const COLORS = {
@@ -47,9 +47,16 @@ const data = loadData();
 const client = new Client({
     intents: [GatewayIntentBits.Guilds],
 });
+let autoChestTimer = null;
 
 client.once(Events.ClientReady, async () => {
     console.log(`VDV2 Chest Bot is online as ${client.user.tag}`);
+    console.log(`VDV2 data file: ${DATA_FILE}`);
+    console.log(`VDV2 balances loaded: ${countBalances()}`);
+
+    if (process.env.RAILWAY_ENVIRONMENT && CONFIG.dataDir !== '/data') {
+        console.warn(`DATA_DIR is "${CONFIG.dataDir}". Use DATA_DIR=/data with a Railway Volume to keep the leaderboard after deploys.`);
+    }
 
     await registerCommands().catch((error) => {
         console.error('Could not register commands:', error);
@@ -61,13 +68,7 @@ client.once(Events.ClientReady, async () => {
         });
     }
 
-    if (CONFIG.autoMinutes > 0) {
-        setInterval(() => {
-            spawnChestInConfiguredChannel('timer').catch((error) => {
-                console.error('Could not spawn automatic VDV2 chest:', error);
-            });
-        }, CONFIG.autoMinutes * 60 * 1000);
-    }
+    scheduleAutoChest('startup');
 });
 
 client.on(Events.InteractionCreate, async (interaction) => {
@@ -189,6 +190,42 @@ async function registerCommands() {
                     .addChannelTypes(ChannelType.GuildText, ChannelType.GuildAnnouncement)
                     .setRequired(true)
             ),
+        new SlashCommandBuilder()
+            .setName('setchesttimer')
+            .setDescription('Set automatic VDV2 chest interval in minutes.')
+            .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
+            .addIntegerOption((option) =>
+                option
+                    .setName('minutes')
+                    .setDescription('Minutes between automatic VDV2 chests. Use 0 to disable.')
+                    .setMinValue(0)
+                    .setMaxValue(10080)
+                    .setRequired(true)
+            ),
+        new SlashCommandBuilder()
+            .setName('exportcoins')
+            .setDescription('Export a VDV2 Coins backup file.')
+            .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
+        new SlashCommandBuilder()
+            .setName('restorecoins')
+            .setDescription('Restore VDV2 Coins from an exported backup file.')
+            .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
+            .addAttachmentOption((option) =>
+                option
+                    .setName('file')
+                    .setDescription('Backup JSON from /exportcoins.')
+                    .setRequired(true)
+            )
+            .addStringOption((option) =>
+                option
+                    .setName('mode')
+                    .setDescription('Replace all balances or merge with current balances.')
+                    .addChoices(
+                        { name: 'replace', value: 'replace' },
+                        { name: 'merge', value: 'merge' }
+                    )
+                    .setRequired(false)
+            ),
     ].map((command) => command.toJSON());
 
     if (CONFIG.guildId) {
@@ -244,6 +281,21 @@ async function handleCommand(interaction) {
 
     if (interaction.commandName === 'setchestchannel') {
         await handleSetChestChannelCommand(interaction);
+        return;
+    }
+
+    if (interaction.commandName === 'setchesttimer') {
+        await handleSetChestTimerCommand(interaction);
+        return;
+    }
+
+    if (interaction.commandName === 'exportcoins') {
+        await handleExportCoinsCommand(interaction);
+        return;
+    }
+
+    if (interaction.commandName === 'restorecoins') {
+        await handleRestoreCoinsCommand(interaction);
     }
 }
 
@@ -381,9 +433,104 @@ async function handleSetChestChannelCommand(interaction) {
     saveData();
 
     await interaction.reply({
-        content: `VDV2 chest channel saved: ${channelMention(channel.id)}. Automatic chests will be sent there every ${CONFIG.autoMinutes} minutes.`,
+        content: `VDV2 chest channel saved: ${channelMention(channel.id)}. Automatic chests will be sent there every ${getAutoMinutes()} minutes.`,
         ephemeral: true,
     });
+}
+
+async function handleSetChestTimerCommand(interaction) {
+    if (!interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild)) {
+        await interaction.reply({
+            content: 'You need Manage Server permission to set the VDV2 chest timer.',
+            ephemeral: true,
+        });
+        return;
+    }
+
+    const minutes = interaction.options.getInteger('minutes', true);
+    data.settings.autoMinutes = minutes;
+    saveData();
+    scheduleAutoChest('command');
+
+    await interaction.reply({
+        content: minutes > 0
+            ? `VDV2 automatic chest timer set to **${minutes} minutes**. The next automatic chest will be sent after this new interval.`
+            : 'VDV2 automatic chest timer disabled.',
+        ephemeral: true,
+    });
+}
+
+async function handleExportCoinsCommand(interaction) {
+    if (!interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild)) {
+        await interaction.reply({
+            content: 'You need Manage Server permission to export VDV2 Coins.',
+            ephemeral: true,
+        });
+        return;
+    }
+
+    const backup = {
+        exportedAt: new Date().toISOString(),
+        dataFile: DATA_FILE,
+        coins: data.coins,
+        settings: data.settings,
+    };
+    const json = JSON.stringify(backup, null, 2);
+
+    await interaction.reply({
+        content: `VDV2 Coins backup created. Balances: **${countBalances()}**.`,
+        files: [
+            {
+                attachment: Buffer.from(json, 'utf8'),
+                name: `vdv2-coins-backup-${Date.now()}.json`,
+            },
+        ],
+        ephemeral: true,
+    });
+}
+
+async function handleRestoreCoinsCommand(interaction) {
+    if (!interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild)) {
+        await interaction.reply({
+            content: 'You need Manage Server permission to restore VDV2 Coins.',
+            ephemeral: true,
+        });
+        return;
+    }
+
+    const attachment = interaction.options.getAttachment('file', true);
+    const mode = interaction.options.getString('mode') || 'replace';
+
+    await interaction.deferReply({ ephemeral: true });
+
+    const backup = await fetchJsonAttachment(attachment);
+    const restoredCoins = normalizeCoins(backup.coins || backup);
+
+    if (!Object.keys(restoredCoins).length) {
+        await interaction.editReply('That backup does not contain any VDV2 Coins.');
+        return;
+    }
+
+    if (mode === 'merge') {
+        data.coins = {
+            ...data.coins,
+            ...restoredCoins,
+        };
+    } else {
+        data.coins = restoredCoins;
+    }
+
+    if (backup.settings && typeof backup.settings === 'object') {
+        data.settings = {
+            ...data.settings,
+            ...backup.settings,
+        };
+    }
+
+    saveData();
+    scheduleAutoChest('restore');
+
+    await interaction.editReply(`VDV2 Coins restored in **${mode}** mode. Balances now saved: **${countBalances()}**.`);
 }
 
 async function handleButton(interaction) {
@@ -517,6 +664,28 @@ async function spawnChestInConfiguredChannel(reason) {
 
     const message = await createChestMessage(channel);
     console.log(`Spawned ${reason} VDV2 chest: ${message.url}`);
+}
+
+function scheduleAutoChest(reason) {
+    if (autoChestTimer) {
+        clearInterval(autoChestTimer);
+        autoChestTimer = null;
+    }
+
+    const minutes = getAutoMinutes();
+
+    if (minutes <= 0) {
+        console.log(`Automatic VDV2 chest timer disabled by ${reason}.`);
+        return;
+    }
+
+    autoChestTimer = setInterval(() => {
+        spawnChestInConfiguredChannel('timer').catch((error) => {
+            console.error('Could not spawn automatic VDV2 chest:', error);
+        });
+    }, minutes * 60 * 1000);
+
+    console.log(`Automatic VDV2 chest timer set to ${minutes} minutes by ${reason}.`);
 }
 
 function createChest(guildId, channelId) {
@@ -782,6 +951,22 @@ function addCoins(userId, amount) {
     return next;
 }
 
+function normalizeCoins(coins) {
+    if (!coins || typeof coins !== 'object' || Array.isArray(coins)) {
+        return {};
+    }
+
+    return Object.fromEntries(
+        Object.entries(coins)
+            .map(([userId, amount]) => [userId, Number.parseInt(amount, 10)])
+            .filter(([userId, amount]) => /^\d{10,25}$/.test(userId) && Number.isFinite(amount) && amount >= 0)
+    );
+}
+
+function countBalances() {
+    return Object.keys(data.coins).length;
+}
+
 function getCoins(userId) {
     return Number(data.coins[userId] || 0);
 }
@@ -792,6 +977,16 @@ function openedCount(chest) {
 
 function getChestChannelId() {
     return data.settings.chestChannelId || CONFIG.chestChannelId || '';
+}
+
+function getAutoMinutes() {
+    const savedMinutes = Number.parseInt(data.settings.autoMinutes, 10);
+
+    if (Number.isFinite(savedMinutes) && savedMinutes >= 0) {
+        return savedMinutes;
+    }
+
+    return CONFIG.autoMinutes;
 }
 
 function getChestImageFile() {
@@ -823,7 +1018,7 @@ function loadData() {
 
 function normalizeData(parsed) {
     return {
-        coins: parsed.coins || {},
+        coins: normalizeCoins(parsed.coins),
         chests: parsed.chests || {},
         settings: parsed.settings || {},
     };
@@ -867,6 +1062,20 @@ function resolveProjectPath(filePath) {
     }
 
     return path.resolve(__dirname, filePath);
+}
+
+async function fetchJsonAttachment(attachment) {
+    if (!attachment.name?.toLowerCase().endsWith('.json')) {
+        throw new Error('Backup file must be a JSON file.');
+    }
+
+    const response = await fetch(attachment.url);
+
+    if (!response.ok) {
+        throw new Error(`Could not download backup file: ${response.status}`);
+    }
+
+    return response.json();
 }
 
 function randomInt(min, max) {

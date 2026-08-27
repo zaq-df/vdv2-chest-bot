@@ -51,7 +51,12 @@ Recommended bot permissions:
 - `/removecoins` - admin coin adjustment
 - `/setcoins` - admin exact balance set
 - `/setchestchannel` - admin channel setup for automatic chests
+- `/setchesttimer` - admin timer setup in minutes
+- `/exportcoins` - admin backup export
+- `/restorecoins` - admin backup restore
 
-The default automatic interval is `CHEST_AUTO_MINUTES=120`, so one VDV2 chest is sent every 2 hours. Set `SPAWN_CHEST_ON_START=true` if you want a chest posted when Railway starts the bot.
+The default automatic interval is `CHEST_AUTO_MINUTES=120`, so one VDV2 chest is sent every 2 hours. You can change it without redeploying by running `/setchesttimer minutes:240`. Set `SPAWN_CHEST_ON_START=true` if you want a chest posted when Railway starts the bot.
 
 The default embed image is bundled at `assets/vdv2chest.png`. You can override it with `CHEST_IMAGE_URL` if you prefer a hosted image URL.
+
+The default coin emoji is `🪙`. If you set `COIN_EMOJI` in Railway Variables, that value overrides the default.
