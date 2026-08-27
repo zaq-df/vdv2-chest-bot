@@ -45,7 +45,7 @@ const DATA_FILE = path.join(CONFIG.dataDir, 'vdv2-chest-data.json');
 const data = loadData();
 
 const client = new Client({
-    intents: [GatewayIntentBits.Guilds],
+    intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages],
 });
 let autoChestTimer = null;
 
@@ -226,6 +226,35 @@ async function registerCommands() {
                     )
                     .setRequired(false)
             ),
+        new SlashCommandBuilder()
+            .setName('rebuildcoins')
+            .setDescription('Rebuild VDV2 Coins by scanning old chest summary messages.')
+            .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
+            .addChannelOption((option) =>
+                option
+                    .setName('channel')
+                    .setDescription('Channel that contains the old VDV2 chest messages.')
+                    .addChannelTypes(ChannelType.GuildText, ChannelType.GuildAnnouncement)
+                    .setRequired(true)
+            )
+            .addIntegerOption((option) =>
+                option
+                    .setName('limit')
+                    .setDescription('How many recent messages to scan. Default 1000.')
+                    .setMinValue(100)
+                    .setMaxValue(5000)
+                    .setRequired(false)
+            )
+            .addStringOption((option) =>
+                option
+                    .setName('mode')
+                    .setDescription('Replace all balances or add recovered coins over current balances.')
+                    .addChoices(
+                        { name: 'replace', value: 'replace' },
+                        { name: 'merge', value: 'merge' }
+                    )
+                    .setRequired(false)
+            ),
     ].map((command) => command.toJSON());
 
     if (CONFIG.guildId) {
@@ -296,6 +325,11 @@ async function handleCommand(interaction) {
 
     if (interaction.commandName === 'restorecoins') {
         await handleRestoreCoinsCommand(interaction);
+        return;
+    }
+
+    if (interaction.commandName === 'rebuildcoins') {
+        await handleRebuildCoinsCommand(interaction);
     }
 }
 
@@ -531,6 +565,63 @@ async function handleRestoreCoinsCommand(interaction) {
     scheduleAutoChest('restore');
 
     await interaction.editReply(`VDV2 Coins restored in **${mode}** mode. Balances now saved: **${countBalances()}**.`);
+}
+
+async function handleRebuildCoinsCommand(interaction) {
+    if (!interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild)) {
+        await interaction.reply({
+            content: 'You need Manage Server permission to rebuild VDV2 Coins.',
+            ephemeral: true,
+        });
+        return;
+    }
+
+    const channel = interaction.options.getChannel('channel', true);
+    const limit = interaction.options.getInteger('limit') || 1000;
+    const mode = interaction.options.getString('mode') || 'replace';
+
+    if (!channel?.isTextBased?.()) {
+        await interaction.reply({
+            content: 'Choose a text channel that contains old VDV2 chest messages.',
+            ephemeral: true,
+        });
+        return;
+    }
+
+    await interaction.deferReply({ ephemeral: true });
+
+    const messages = await fetchRecentMessages(channel, limit);
+    const recovered = rebuildCoinsFromMessages(messages);
+    const recoveredCount = Object.keys(recovered.coins).length;
+
+    if (!recoveredCount) {
+        await interaction.editReply(
+            `I scanned **${messages.length}** messages in ${channelMention(channel.id)}, but I could not find any chest summary coin lines. Try a higher limit or the channel where the chest results were posted.`
+        );
+        return;
+    }
+
+    if (mode === 'merge') {
+        for (const [userId, amount] of Object.entries(recovered.coins)) {
+            addCoins(userId, amount);
+        }
+    } else {
+        data.coins = recovered.coins;
+    }
+
+    saveData();
+
+    await interaction.editReply(
+        [
+            `Rebuilt VDV2 Coins from ${channelMention(channel.id)}.`,
+            `Scanned messages: **${messages.length}**`,
+            `Chest summaries found: **${recovered.summaryCount}**`,
+            `Members recovered: **${recoveredCount}**`,
+            `Mode: **${mode}**`,
+            '',
+            'Run `/leaderboard` to check the recovered top.',
+        ].join('\n')
+    );
 }
 
 async function handleButton(interaction) {
@@ -965,6 +1056,82 @@ function normalizeCoins(coins) {
 
 function countBalances() {
     return Object.keys(data.coins).length;
+}
+
+async function fetchRecentMessages(channel, limit) {
+    const messages = [];
+    let before;
+
+    while (messages.length < limit) {
+        const batchSize = Math.min(100, limit - messages.length);
+        const batch = await channel.messages.fetch({
+            limit: batchSize,
+            before,
+        });
+
+        if (!batch.size) {
+            break;
+        }
+
+        messages.push(...batch.values());
+        before = batch.last().id;
+    }
+
+    return messages;
+}
+
+function rebuildCoinsFromMessages(messages) {
+    const coins = {};
+    let summaryCount = 0;
+
+    for (const message of messages) {
+        for (const embed of message.embeds || []) {
+            const title = embed.title || '';
+            const description = embed.description || '';
+
+            if (!/fully looted/i.test(title) || !description) {
+                continue;
+            }
+
+            let foundAnyLine = false;
+
+            for (const line of description.split('\n')) {
+                const parsed = parseSummaryCoinLine(line);
+
+                if (!parsed) {
+                    continue;
+                }
+
+                coins[parsed.userId] = (coins[parsed.userId] || 0) + parsed.amount;
+                foundAnyLine = true;
+            }
+
+            if (foundAnyLine) {
+                summaryCount += 1;
+            }
+        }
+    }
+
+    return { coins, summaryCount };
+}
+
+function parseSummaryCoinLine(line) {
+    const mention = line.match(/<@!?(\d{10,25})>/);
+
+    if (!mention) {
+        return null;
+    }
+
+    const amount = line.match(/[-–—]\s*(\d+)\s+(?:VDV2\s+)?Coins?\b/i);
+
+    if (!amount) {
+        return null;
+    }
+
+    return {
+        userId: mention[1],
+        amount: Number.parseInt(amount[1], 10),
+    };
 }
 
 function getCoins(userId) {

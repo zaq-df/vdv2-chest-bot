@@ -54,6 +54,7 @@ Recommended bot permissions:
 - `/setchesttimer` - admin timer setup in minutes
 - `/exportcoins` - admin backup export
 - `/restorecoins` - admin backup restore
+- `/rebuildcoins` - admin recovery from old chest summary messages
 
 The default automatic interval is `CHEST_AUTO_MINUTES=120`, so one VDV2 chest is sent every 2 hours. You can change it without redeploying by running `/setchesttimer minutes:240`. Set `SPAWN_CHEST_ON_START=true` if you want a chest posted when Railway starts the bot.
 
