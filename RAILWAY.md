@@ -50,11 +50,14 @@ Recommended bot permissions:
 - `/addcoins` - admin coin adjustment
 - `/removecoins` - admin coin adjustment
 - `/setcoins` - admin exact balance set
+- `/resetcoins all` - reset all saved coin balances to zero (requires Manage Server)
 - `/setchestchannel` - admin channel setup for automatic chests
 - `/setchesttimer` - admin timer setup in minutes
 - `/exportcoins` - admin backup export
 - `/restorecoins` - admin backup restore
 - `/rebuildcoins` - admin recovery from old chest summary messages
+
+`/resetcoins all` clears the leaderboard and saves the reset immediately. Chest settings and existing chests are preserved. Use `/exportcoins` before resetting if you want a backup that can be restored with `/restorecoins`.
 
 The default automatic interval is `CHEST_AUTO_MINUTES=120`, so one VDV2 chest is sent every 2 hours. You can change it without redeploying by running `/setchesttimer minutes:240`. Set `SPAWN_CHEST_ON_START=true` if you want a chest posted when Railway starts the bot.
 

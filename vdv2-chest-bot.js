@@ -180,6 +180,15 @@ async function registerCommands() {
                     .setRequired(true)
             ),
         new SlashCommandBuilder()
+            .setName('resetcoins')
+            .setDescription('Reset VDV2 Coins balances.')
+            .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
+            .addSubcommand((subcommand) =>
+                subcommand
+                    .setName('all')
+                    .setDescription('Reset all saved VDV2 Coins balances to zero.')
+            ),
+        new SlashCommandBuilder()
             .setName('setchestchannel')
             .setDescription('Set the channel where automatic VDV2 chests are sent.')
             .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
@@ -305,6 +314,11 @@ async function handleCommand(interaction) {
 
     if (interaction.commandName === 'setcoins') {
         await handleSetCoinsCommand(interaction);
+        return;
+    }
+
+    if (interaction.commandName === 'resetcoins') {
+        await handleResetCoinsCommand(interaction);
         return;
     }
 
@@ -440,6 +454,29 @@ async function handleSetCoinsCommand(interaction) {
                 .setColor(COLORS.result)
                 .setDescription(`${userMention(user.id)} now has exactly **${amount} VDV2 Coins**.`),
         ],
+        ephemeral: true,
+    });
+}
+
+async function handleResetCoinsCommand(interaction) {
+    if (!interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild)) {
+        await interaction.reply({
+            content: 'You need Manage Server permission to reset VDV2 Coins.',
+            ephemeral: true,
+        });
+        return;
+    }
+
+    if (interaction.options.getSubcommand() !== 'all') {
+        return;
+    }
+
+    const resetCount = countBalances();
+    data.coins = {};
+    saveData();
+
+    await interaction.reply({
+        content: `All VDV2 Coins balances have been reset to **0**. Members reset: **${resetCount}**.`,
         ephemeral: true,
     });
 }
